@@ -102,11 +102,34 @@ def bybit_signed_get(api_key: str, api_secret: str, endpoint: str, params: dict)
         "X-BAPI-SIGN-TYPE": "2",
         "X-BAPI-TIMESTAMP": ts,
         "X-BAPI-RECV-WINDOW": RECV_WINDOW,
+        # Bybit's CDN (CloudFront/WAF) blocks requests whose User-Agent
+        # identifies them as a generic scripting library (e.g. the default
+        # "python-requests/x.y.z"). A browser-like User-Agent avoids that
+        # bot-detection block, which otherwise returns a bare 403 Forbidden
+        # before the request ever reaches Bybit's backend.
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        ),
+        "Accept": "application/json",
     }
     url = f"{BYBIT_BASE_URL}{endpoint}"
     if query_string:
         url += f"?{query_string}"
     resp = requests.get(url, headers=headers, timeout=20)
+    if resp.status_code >= 400:
+        # Diagnostic detail so we can tell a CDN/WAF block (CloudFront, etc.)
+        # apart from a real Bybit API error, instead of just seeing a bare
+        # "403 Forbidden" with no context.
+        diag_headers = {
+            k: v
+            for k, v in resp.headers.items()
+            if k.lower() in ("server", "via", "x-cache", "x-amz-cf-id", "x-amz-cf-pop", "cf-ray", "content-type")
+        }
+        log.error(
+            "Bybit HTTP %s for %s | resp_headers=%s | body=%r",
+            resp.status_code, url, diag_headers, resp.text[:500],
+        )
     resp.raise_for_status()
     return resp.json()
 
